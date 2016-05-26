@@ -55,6 +55,12 @@ public interface Session {
      */
     <T> T find(Class<T> cls, Object key);
 
+    DTOCache getDTOCache();
+
+    void createDTOCache();
+
+    <T> T cacheNewInstance(Class<T> cls);
+
     /** Create an instance of an interface or dynamic class that maps to a table.
      * @param cls the interface for which to create an instance
      * @return an instance that implements the interface

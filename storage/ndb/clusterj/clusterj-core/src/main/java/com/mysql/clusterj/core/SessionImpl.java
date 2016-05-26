@@ -17,15 +17,10 @@
 
 package com.mysql.clusterj.core;
 
-import com.mysql.clusterj.ClusterJException;
-import com.mysql.clusterj.ClusterJFatalInternalException;
-import com.mysql.clusterj.ClusterJUserException;
-import com.mysql.clusterj.DynamicObject;
-import com.mysql.clusterj.DynamicObjectDelegate;
-import com.mysql.clusterj.LockMode;
-import com.mysql.clusterj.Query;
-import com.mysql.clusterj.Transaction;
+import com.mysql.clusterj.*;
 
+import com.mysql.clusterj.core.dtocache.DTOCacheImpl;
+import com.mysql.clusterj.core.dtocache.DTOCacheSPI;
 import com.mysql.clusterj.core.spi.DomainTypeHandler;
 import com.mysql.clusterj.core.spi.SmartValueHandler;
 import com.mysql.clusterj.core.spi.ValueHandler;
@@ -134,6 +129,9 @@ public class SessionImpl implements SessionSPI, CacheManager, StoreManager {
     /** The lock mode for read operations */
     private LockMode lockmode = LockMode.READ_COMMITTED;
 
+    /** HOP :: DTO Cache */
+    private DTOCacheSPI dtoCache;
+
     /** Create a SessionImpl with factory, properties, Db, and dictionary
      */
     SessionImpl(SessionFactoryImpl factory, Map properties, Db db, Dictionary dictionary) {
@@ -145,8 +143,16 @@ public class SessionImpl implements SessionSPI, CacheManager, StoreManager {
         transactionState = transactionStateNotActive;
     }
 
+    public void createDTOCache() {
+        dtoCache = new DTOCacheImpl();
+    }
+
+    public DTOCacheSPI getDTOCache() {
+        return dtoCache;
+    }
+
     /** Create a query from a query definition.
-     * 
+     *
      * @param qd the query definition
      * @return the query
      */
@@ -162,7 +168,7 @@ public class SessionImpl implements SessionSPI, CacheManager, StoreManager {
     /** Find an instance by its class and primary key.
      * If there is a compound primary key, the key is an Object[] containing
      * all of the primary key fields in order of declaration in annotations.
-     * 
+     *
      * @param cls the class
      * @param key the primary key
      * @return the instance
@@ -271,24 +277,35 @@ public class SessionImpl implements SessionSPI, CacheManager, StoreManager {
         assertNotClosed();
         if (!isEnlisted()) {
             // there is still time to set the partition key
-            PartitionKey partitionKey = 
+            PartitionKey partitionKey =
                 domainTypeHandler.createPartitionKey(keyHandler);
             clusterTransaction.setPartitionKey(partitionKey);
         }
     }
 
     /** Create an instance of a class to be persisted.
-     * 
+     *
      * @param cls the class
      * @return a new instance that can be used with makePersistent
      */
     public <T> T newInstance(Class<T> cls) {
         assertNotClosed();
+        if (dtoCache != null) {
+            T instance = dtoCache.get(cls);
+            if (instance != null) {
+                return instance;
+            }
+        }
+
+        return factory.newInstance(cls, dictionary, db);
+    }
+
+    public <T> T cacheNewInstance(Class<T> cls) {
         return factory.newInstance(cls, dictionary, db);
     }
 
     /** Create an instance of a class to be persisted and set the primary key.
-     * 
+     *
      * @param cls the class
      * @return a new instance that can be used with makePersistent,
      * savePersistent, writePersistent, updatePersistent, or deletePersistent
@@ -375,7 +392,7 @@ public class SessionImpl implements SessionSPI, CacheManager, StoreManager {
                     // mark instance as not found
                     instanceHandler.found(Boolean.FALSE);
                 }
-                
+
             }
         };
         clusterTransaction.postExecuteCallback(postExecuteOperation);
@@ -402,9 +419,9 @@ public class SessionImpl implements SessionSPI, CacheManager, StoreManager {
         getDomainTypeHandler(instance);
         return true;
     }
-    
+
     /** Make an instance persistent. Also recursively make an iterable collection or array persistent.
-     * 
+     *
      * @param object the instance or array or iterable collection of instances
      * @return the instance
      */
@@ -483,7 +500,7 @@ public class SessionImpl implements SessionSPI, CacheManager, StoreManager {
     }
 
     /** Make a number of instances persistent.
-     * 
+     *
      * @param instances a Collection or array of objects to persist
      * @return a Collection or array with the same order of iteration
      */
@@ -511,9 +528,9 @@ public class SessionImpl implements SessionSPI, CacheManager, StoreManager {
         delete(domainTypeHandler, keyValueHandler);
     }
 
-    /** Remove an instance from the database. Only the key field(s) 
+    /** Remove an instance from the database. Only the key field(s)
      * are used to identify the instance.
-     * 
+     *
      * @param object the instance to remove from the database
      */
     public void deletePersistent(Object object) {
@@ -634,7 +651,7 @@ public class SessionImpl implements SessionSPI, CacheManager, StoreManager {
                     cacheCount = 0;
                     fetch = true;
                     break;
-                default: 
+                default:
                     throw new ClusterJException(
                             local.message("ERR_Next_Result_Illegal", result));
             }
@@ -787,7 +804,7 @@ public class SessionImpl implements SessionSPI, CacheManager, StoreManager {
     }
 
     /** Get the current transaction.
-     * 
+     *
      * @return the transaction
      */
     public Transaction currentTransaction() {
@@ -795,7 +812,7 @@ public class SessionImpl implements SessionSPI, CacheManager, StoreManager {
     }
 
     /** Close this session and deallocate all resources.
-     * 
+     *
      */
     public void close() {
         if (clusterTransaction != null) {
@@ -805,6 +822,9 @@ public class SessionImpl implements SessionSPI, CacheManager, StoreManager {
         if (db != null) {
             db.close();
             db = null;
+        }
+        if (dtoCache != null) {
+            dtoCache = null;
         }
     }
 
@@ -821,7 +841,7 @@ public class SessionImpl implements SessionSPI, CacheManager, StoreManager {
     }
 
     /** Begin the current transaction.
-     * 
+     *
      */
     public void begin() {
         assertNotClosed();
@@ -848,7 +868,7 @@ public class SessionImpl implements SessionSPI, CacheManager, StoreManager {
     }
 
     /** Commit the current transaction.
-     * 
+     *
      */
     public void commit() {
         assertNotClosed();
@@ -1142,7 +1162,7 @@ public class SessionImpl implements SessionSPI, CacheManager, StoreManager {
     };
 
     /** Get the domain type handler for an instance.
-     * 
+     *
      * @param object the instance for which to get the domain type handler
      * @return the domain type handler
      */
@@ -1153,7 +1173,7 @@ public class SessionImpl implements SessionSPI, CacheManager, StoreManager {
     }
 
     /** Get the domain type handler for a class.
-     * 
+     *
      * @param cls the class
      * @return the domain type handler
      */
@@ -1168,7 +1188,7 @@ public class SessionImpl implements SessionSPI, CacheManager, StoreManager {
     }
 
     /** Is there an active transaction.
-     * 
+     *
      * @return true if there is an active transaction
      */
     boolean isActive() {
@@ -1209,7 +1229,7 @@ public class SessionImpl implements SessionSPI, CacheManager, StoreManager {
     }
 
     /** Create a query from a class.
-     * 
+     *
      * @param cls the class
      * @return the query
      */
@@ -1220,7 +1240,7 @@ public class SessionImpl implements SessionSPI, CacheManager, StoreManager {
     }
 
     /** Get a query builder.
-     * 
+     *
      * @return the query builder
      */
     public QueryBuilder getQueryBuilder() {
@@ -1229,7 +1249,7 @@ public class SessionImpl implements SessionSPI, CacheManager, StoreManager {
     }
 
     /** Create an index scan operation for an index and table.
-     * 
+     *
      * @param storeIndex the index
      * @param storeTable the table
      * @return the index scan operation
@@ -1246,7 +1266,7 @@ public class SessionImpl implements SessionSPI, CacheManager, StoreManager {
     }
 
     /** Create an index scan operation for an index and table to be used for a multi-range scan.
-     * 
+     *
      * @param storeIndex the index
      * @param storeTable the table
      * @return the index scan operation
@@ -1263,7 +1283,7 @@ public class SessionImpl implements SessionSPI, CacheManager, StoreManager {
     }
 
     /** Create an index scan delete operation for an index and table.
-     * 
+     *
      * @param storeIndex the index
      * @param storeTable the table
      * @return the index scan operation
@@ -1361,7 +1381,7 @@ public class SessionImpl implements SessionSPI, CacheManager, StoreManager {
     }
 
     /** Create a delete operation for a table.
-     * 
+     *
      * @param storeTable the table
      * @return the operation
      */
@@ -1377,7 +1397,7 @@ public class SessionImpl implements SessionSPI, CacheManager, StoreManager {
     }
 
     /** Create an update operation for a table.
-     * 
+     *
      * @param storeTable the table
      * @return the operation
      */
